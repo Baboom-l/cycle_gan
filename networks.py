@@ -145,6 +145,44 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', init_type='normal'
 ##############################################################################
 # Classes
 ##############################################################################
+class PartialConv2d(nn.Module):
+    def __init__(self,in_channels,out_channels,kernel_size,stride,padding,bias=False):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.stride = stride
+        self.padding = padding
+        self.conv = nn.Conv2d(in_channels,out_channels,kernel_size,stride,padding=padding,bias=bias)
+
+        self.weight_mask = torch.ones((1,1,kernel_size,kernel_size))
+        
+        self.weight_next = torch.ones((1,1,1,1))
+        
+        self.sum1 = kernel_size ** 2
+
+    def forward(self,x,mask):
+        if mask is None:
+            mask = torch.ones(x.data.shape[0], 1, x.data.shape[2], x.data.shape[3]).to(input)
+        raw_y = self.conv(torch.mul(x,mask))
+
+        with torch.no_grad():
+            if  self.weight_mask.type() != x.type():
+                self.weight_mask =  self.weight_mask.to(x)
+                self.weight_next =  self.weight_next.to(x)
+            updated_mask = F.conv2d(mask,self.weight_mask,stride=self.stride,padding=self.padding)
+            next_mask = F.conv2d(mask,self.weight_next,stride=self.stride,padding=0)
+            ratio = self.sum1 / (updated_mask + 1e-8) # sum1 / sumM
+            updated_mask = torch.clamp(updated_mask,min=0,max=1)
+
+        if self.conv.bias is not None: 
+            bias_reshape = self.conv.bias.view(1,self.out_channels,1,1)
+            y = torch.mul(raw_y - bias_reshape, ratio) + bias_reshape
+            y = torch.mul(y,next_mask)
+        else:
+            y = torch.mul(raw_y,ratio)
+            y = torch.mul(y,next_mask)
+        return y, next_mask
+    
 class GANLoss(nn.Module):
     """Define different GAN objectives.
 
